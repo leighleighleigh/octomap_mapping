@@ -512,7 +512,7 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         updateMinKey(minKey, m_updateBBXMin);
         updateMaxKey(minKey, m_updateBBXMax);
       } else{
-        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<minKey);
+        // ROS_ERROR_STREAM("Could not generate Key for endpoint "<<minKey);
       }
 
       octomap::OcTreeKey maxKey;
@@ -520,7 +520,7 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         updateMinKey(maxKey, m_updateBBXMin);
         updateMaxKey(maxKey, m_updateBBXMax);
       } else{
-        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<maxKey);
+        // ROS_ERROR_STREAM("Could not generate Key for endpoint "<<maxKey);
       }
 
       // Set the BBX min and Max on the octree
