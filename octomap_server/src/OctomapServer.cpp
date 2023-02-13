@@ -512,7 +512,7 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         updateMinKey(minKey, m_updateBBXMin);
         updateMaxKey(minKey, m_updateBBXMax);
       } else{
-        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
+        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<minKey);
       }
 
       octomap::OcTreeKey maxKey;
@@ -520,15 +520,15 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         updateMinKey(maxKey, m_updateBBXMin);
         updateMaxKey(maxKey, m_updateBBXMax);
       } else{
-        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
+        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<maxKey);
       }
 
       // Set the BBX min and Max on the octree
-      m_octree.setBBXMin(baseFrameBBXMin);
-      m_octree.setBBXMax(baseFrameBBXMax);
+      m_octree->setBBXMin(baseFrameBBXMin);
+      m_octree->setBBXMax(baseFrameBBXMax);
 
       // Enable BBX
-      m_octree.useBBXLimit(true);
+      m_octree->useBBXLimit(true);
 
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
