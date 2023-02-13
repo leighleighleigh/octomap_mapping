@@ -290,7 +290,7 @@ void OctomapServer::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   try {
     m_tfListener.lookupTransform(m_worldFrameId, cloud->header.frame_id, cloud->header.stamp, sensorToWorldTf);
   } catch(tf::TransformException& ex){
-    ROS_ERROR_STREAM( "Transform error of sensor data: " << ex.what() << ", quitting callback");
+    ROS_DEBUG_STREAM( "Transform error of sensor data: " << ex.what() << ", quitting callback");
     return;
   }
 
@@ -506,18 +506,29 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       baseFrameBBXMax(0) = baseToWorldTf.getOrigin().x() + m_baseFrameBBXSize/2.0;
       baseFrameBBXMax(1) = baseToWorldTf.getOrigin().y() + m_baseFrameBBXSize/2.0;
       baseFrameBBXMax(2) = baseToWorldTf.getOrigin().z() + m_baseFrameBBXSize/2.0;
+        
+      octomap::OcTreeKey minKey;
+      if (m_octree->coordToKeyChecked(baseFrameBBXMin, minKey)){
+        updateMinKey(minKey, m_updateBBXMin);
+        updateMaxKey(minKey, m_updateBBXMax);
+      } else{
+        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
+      }
 
-      // Now convert the point3d items to an OcTreeKey, which is what we need to compare to the m_updateBBXMin and m_updateBBXMax
-      OcTreeKey baseFrameBBXMinKey, baseFrameBBXMaxKey;
-      if (m_octree->coordToKeyChecked(baseFrameBBXMin, baseFrameBBXMinKey) && m_octree->coordToKeyChecked(baseFrameBBXMax, baseFrameBBXMaxKey))
-      {
-        updateMinKey(baseFrameBBXMinKey, m_updateBBXMin);
-        updateMaxKey(baseFrameBBXMaxKey, m_updateBBXMax);
+      octomap::OcTreeKey maxKey;
+      if (m_octree->coordToKeyChecked(baseFrameBBXMax, maxKey)){
+        updateMinKey(maxKey, m_updateBBXMin);
+        updateMaxKey(maxKey, m_updateBBXMax);
+      } else{
+        ROS_ERROR_STREAM("Could not generate Key for endpoint "<<new_end);
       }
-      else
-      {
-        ROS_ERROR_STREAM("Could not generate OcTreeKey for base frame bounding box.");
-      }
+
+      // Set the BBX min and Max on the octree
+      m_octree.setBBXMin(baseFrameBBXMin);
+      m_octree.setBBXMax(baseFrameBBXMax);
+
+      // Enable BBX
+      m_octree.useBBXLimit(true);
 
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
