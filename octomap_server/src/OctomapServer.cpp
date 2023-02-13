@@ -184,8 +184,8 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
 
-  m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 5);
-  m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 5);
+  m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 50);
+  m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 50);
   m_tfPointCloudSub->registerCallback(boost::bind(&OctomapServer::insertCloudCallback, this, boost::placeholders::_1));
 
   m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &OctomapServer::octomapBinarySrv, this);
@@ -506,13 +506,16 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       baseFrameBBXMax(0) = baseToWorldTf.getOrigin().x() + m_baseFrameBBXSize/2.0;
       baseFrameBBXMax(1) = baseToWorldTf.getOrigin().y() + m_baseFrameBBXSize/2.0;
       baseFrameBBXMax(2) = baseToWorldTf.getOrigin().z() + m_baseFrameBBXSize/2.0;
+
+      // Print out the base frame BBX
+      ROS_INFO_STREAM_NAMED("octomap_bbx","Base frame BBX: " << baseFrameBBXMin(0) << " " << baseFrameBBXMin(1) << " " << baseFrameBBXMin(2) << " / " << baseFrameBBXMax(0) << " " << baseFrameBBXMax(1) << " " << baseFrameBBXMax(2));
         
       octomap::OcTreeKey minKey;
       if (m_octree->coordToKeyChecked(baseFrameBBXMin, minKey)){
         updateMinKey(minKey, m_updateBBXMin);
         updateMaxKey(minKey, m_updateBBXMax);
       } else{
-        // ROS_ERROR_STREAM("Could not generate Key for endpoint "<<minKey);
+        ROS_ERROR_STREAM_NAMED("octomap_bbx","Could not generate Key for endpoint "<<baseFrameBBXMin);
       }
 
       octomap::OcTreeKey maxKey;
@@ -520,15 +523,19 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
         updateMinKey(maxKey, m_updateBBXMin);
         updateMaxKey(maxKey, m_updateBBXMax);
       } else{
-        // ROS_ERROR_STREAM("Could not generate Key for endpoint "<<maxKey);
+        ROS_ERROR_STREAM_NAMED("octomap_bbx","Could not generate Key for endpoint "<<baseFrameBBXMax);
       }
+
+      // Print min max key
+      ROS_DEBUG_STREAM_NAMED("octomap_bbx","Min key: " << m_updateBBXMin[0] << " " << m_updateBBXMin[1]);
+      ROS_DEBUG_STREAM_NAMED("octomap_bbx","Max key: " << m_updateBBXMax[0] << " " << m_updateBBXMax[1]);
+
+      // Enable BBX
+      m_octree->useBBXLimit(true);
 
       // Set the BBX min and Max on the octree
       m_octree->setBBXMin(baseFrameBBXMin);
       m_octree->setBBXMax(baseFrameBBXMax);
-
-      // Enable BBX
-      m_octree->useBBXLimit(true);
 
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
