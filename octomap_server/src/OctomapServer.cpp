@@ -96,7 +96,7 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("min_y_size", m_minSizeY,m_minSizeY);
 
   m_nh_private.param("use_publish_timer", m_usePublishTimer, m_usePublishTimer);
-  m_nh_private.param("publish_timer_period", m_publishPeriod, m_publishPeriod);
+  m_nh_private.param("publish_period", m_publishPeriod, m_publishPeriod);
 
   m_nh_private.param("use_base_frame_bbx_limit", m_useBaseFrameBBXLimit, m_useBaseFrameBBXLimit);
   m_nh_private.param("base_frame_bbx_size", m_baseFrameBBXSize, m_baseFrameBBXSize);
