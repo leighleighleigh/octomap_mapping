@@ -131,6 +131,8 @@ protected:
   void publishProjected2DMap(const ros::Time& rostime = ros::Time::now());
   virtual void publishAll(const ros::Time& rostime = ros::Time::now());
 
+  void publishAllTimer(const ros::TimerEvent&);
+
   /**
   * @brief update occupancy map with a scan labeled as ground and nonground.
   * The scans should be in the global map frame.
@@ -213,6 +215,7 @@ protected:
   tf::TransformListener m_tfListener;
   boost::recursive_mutex m_config_mutex;
   dynamic_reconfigure::Server<OctomapServerConfig> m_reconfigureServer;
+  ros::Timer m_publishTimer;
 
   OcTreeT* m_octree;
   octomap::KeyRay m_keyRay;  // temp storage for ray casting
@@ -230,6 +233,8 @@ protected:
 
   bool m_latchedTopics;
   bool m_publishFreeSpace;
+  bool m_usePublishTimer; // Instead of publishing the entire map after EVERY point cloud insertion, use a timer.
+  double m_publishPeriod; // How often to publish the entire map, in seconds.
 
   double m_res;
   unsigned m_treeDepth;
@@ -246,6 +251,10 @@ protected:
   double m_minSizeX;
   double m_minSizeY;
   bool m_filterSpeckles;
+
+  // Apply bounding box size limit to the map, with the origin at the position of the base frame.
+  bool m_useBaseFrameBBXLimit;
+  double m_baseFrameBBXSize; // Size in metres of the bounding box in the base frame, square in the x-y plane.
 
   bool m_filterGroundPlane;
   double m_groundFilterDistance;

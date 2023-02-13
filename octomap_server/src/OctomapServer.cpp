@@ -54,6 +54,8 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_colorFactor(0.8),
   m_latchedTopics(true),
   m_publishFreeSpace(false),
+  m_usePublishTimer(true),
+  m_publishPeriod(0.2),
   m_res(0.05),
   m_treeDepth(0),
   m_maxTreeDepth(0),
@@ -67,6 +69,8 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_occupancyMaxZ(std::numeric_limits<double>::max()),
   m_minSizeX(0.0), m_minSizeY(0.0),
   m_filterSpeckles(false), m_filterGroundPlane(false),
+  m_useBaseFrameBBXLimit(true),
+  m_baseFrameBBXSize(5.0),
   m_groundFilterDistance(0.04), m_groundFilterAngle(0.15), m_groundFilterPlaneDistance(0.07),
   m_compressMap(true),
   m_incrementalUpdate(false),
@@ -90,6 +94,12 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("occupancy_max_z", m_occupancyMaxZ,m_occupancyMaxZ);
   m_nh_private.param("min_x_size", m_minSizeX,m_minSizeX);
   m_nh_private.param("min_y_size", m_minSizeY,m_minSizeY);
+
+  m_nh_private.param("use_publish_timer", m_usePublishTimer, m_usePublishTimer);
+  m_nh_private.param("publish_timer_period", m_publishPeriod, m_publishPeriod);
+
+  m_nh_private.param("use_base_frame_bbx_limit", m_useBaseFrameBBXLimit, m_useBaseFrameBBXLimit);
+  m_nh_private.param("base_frame_bbx_size", m_baseFrameBBXSize, m_baseFrameBBXSize);
 
   m_nh_private.param("filter_speckles", m_filterSpeckles, m_filterSpeckles);
   m_nh_private.param("filter_ground", m_filterGroundPlane, m_filterGroundPlane);
@@ -186,6 +196,12 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   dynamic_reconfigure::Server<OctomapServerConfig>::CallbackType f;
   f = boost::bind(&OctomapServer::reconfigureCallback, this, boost::placeholders::_1, boost::placeholders::_2);
   m_reconfigureServer.setCallback(f);
+
+  // Create a timer which publishes the map
+  if(m_publishPeriod > 0.0 && m_usePublishTimer)
+  {
+    m_publishTimer = m_nh.createTimer(ros::Duration(m_publishPeriod), &OctomapServer::publishAllTimer, this);
+  }
 }
 
 OctomapServer::~OctomapServer(){
@@ -351,7 +367,11 @@ void OctomapServer::insertCloudCallback(const sensor_msgs::PointCloud2::ConstPtr
   double total_elapsed = (ros::WallTime::now() - startTime).toSec();
   ROS_DEBUG("Pointcloud insertion in OctomapServer done (%zu+%zu pts (ground/nonground), %f sec)", pc_ground.size(), pc_nonground.size(), total_elapsed);
 
-  publishAll(cloud->header.stamp);
+  // Only publish everything IF we are not using a separate publish timer
+  if(!m_usePublishTimer)
+  {
+    publishAll(cloud->header.stamp);
+  }
 }
 
 void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCloud& ground, const PCLPointCloud& nonground){
@@ -467,6 +487,43 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 //      m_updateBBXMin = tmpMin;
 //      m_updateBBXMax = tmpMax;
 //   }
+
+  // If base frame BBX limit is enabled, we will 'crop' the map to a square region surrounding the robot base frame
+  // First we will look up the transform from the base_frame to the map frame (world frame)
+  if(m_useBaseFrameBBXLimit)
+  {
+    tf::StampedTransform baseToWorldTf;
+
+    try{
+      m_tfListener.lookupTransform(m_worldFrameId, m_baseFrameId, ros::Time(0), baseToWorldTf);
+      // We now have the position of the base frame in the world frame
+      // Which we will use to determine the bounding box of the map to be published.
+      // We will use the base frame position and the m_baseFrameBBXSize parameter to determine the bounding box cube size
+      octomap::point3d baseFrameBBXMin, baseFrameBBXMax;
+      baseFrameBBXMin(0) = baseToWorldTf.getOrigin().x() - m_baseFrameBBXSize/2.0;
+      baseFrameBBXMin(1) = baseToWorldTf.getOrigin().y() - m_baseFrameBBXSize/2.0;
+      baseFrameBBXMin(2) = baseToWorldTf.getOrigin().z() - m_baseFrameBBXSize/2.0;
+      baseFrameBBXMax(0) = baseToWorldTf.getOrigin().x() + m_baseFrameBBXSize/2.0;
+      baseFrameBBXMax(1) = baseToWorldTf.getOrigin().y() + m_baseFrameBBXSize/2.0;
+      baseFrameBBXMax(2) = baseToWorldTf.getOrigin().z() + m_baseFrameBBXSize/2.0;
+
+      // Now convert the point3d items to an OcTreeKey, which is what we need to compare to the m_updateBBXMin and m_updateBBXMax
+      OcTreeKey baseFrameBBXMinKey, baseFrameBBXMaxKey;
+      if (m_octree->coordToKeyChecked(baseFrameBBXMin, baseFrameBBXMinKey) && m_octree->coordToKeyChecked(baseFrameBBXMax, baseFrameBBXMaxKey))
+      {
+        updateMinKey(baseFrameBBXMinKey, m_updateBBXMin);
+        updateMaxKey(baseFrameBBXMaxKey, m_updateBBXMax);
+      }
+      else
+      {
+        ROS_ERROR_STREAM("Could not generate OcTreeKey for base frame bounding box.");
+      }
+
+    }catch(tf::TransformException& ex){
+      ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
+                        "You may need to set the base_frame_id or frame_id.");
+    }
+  }
 
   // TODO: we could also limit the bbx to be within the map bounds here (see publishing check)
   minPt = m_octree->keyToCoord(m_updateBBXMin);
@@ -758,6 +815,12 @@ bool OctomapServer::clearBBXSrv(BBXSrv::Request& req, BBXSrv::Response& resp){
   publishAll(ros::Time::now());
 
   return true;
+}
+
+void OctomapServer::publishAllTimer(const ros::TimerEvent&)
+{
+  ros::Time rostime = ros::Time::now();
+  publishAll(rostime); 
 }
 
 bool OctomapServer::resetSrv(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp) {
