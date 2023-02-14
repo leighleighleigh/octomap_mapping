@@ -541,8 +541,9 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       // This is done in a naive way by iterating over all the voxels in the octree
       double thresMin = m_octree->getClampingThresMin();
 
-      for(OcTree::leaf_iterator it = m_octree->begin(), end=m_octree->end(); it!= end; ++it) {
+      for(OcTreeT::iterator it = m_octree->begin(m_maxTreeDepth), end=m_octree->end(); it!= end; ++it) {
         octomap::OcTreeKey key = it.getKey();
+
         // The if condition checks for INSIDE the BBX
         if (key[0] >= bbxMinKey[0] && key[0] <= bbxMaxKey[0]
             && key[1] >= bbxMinKey[1] && key[1] <= bbxMaxKey[1]
