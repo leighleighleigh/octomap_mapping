@@ -537,6 +537,27 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       m_octree->setBBXMin(baseFrameBBXMin);
       m_octree->setBBXMax(baseFrameBBXMax);
 
+      // For everything outside the BBX, we will set the occupancy to 0
+      // This is done in a naive way by iterating over all the voxels in the octree
+      double thresMin = m_octree->getClampingThresMin();
+
+      for(OcTree::leaf_iterator it = m_octree->begin(), end=m_octree->end(); it!= end; ++it) {
+        octomap::OcTreeKey key = it.getKey();
+        // The if condition checks for INSIDE the BBX
+        if (key[0] >= bbxMinKey[0] && key[0] <= bbxMaxKey[0]
+            && key[1] >= bbxMinKey[1] && key[1] <= bbxMaxKey[1]
+            && key[2] >= bbxMinKey[2] && key[2] <= bbxMaxKey[2])
+        {
+          // Point is inside bounds
+        }else{
+          it->setLogOdds(octomap::logodds(thresMin));
+        }
+      }
+
+      // Unsure if this is needed?
+      m_octree->updateInnerOccupancy();
+
+
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
                         "You may need to set the base_frame_id or frame_id.");
