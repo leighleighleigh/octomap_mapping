@@ -181,7 +181,11 @@ protected:
   virtual void update2DMap(const OcTreeT::iterator& it, bool occupied);
 
   inline unsigned mapIdx(int i, int j) const {
-    return m_gridmap.info.width * j + i;
+    int idx = m_gridmap.info.width * j + i;
+    // Log debug for j and i here
+    // ROS_WARN("j: %d, i: %d", j, i);
+    assert(idx >= 0 && idx < (int)m_gridmap.data.size());
+    return (unsigned) idx;
   }
 
   inline unsigned mapIdx(const octomap::OcTreeKey& key) const {

@@ -530,12 +530,12 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       ROS_DEBUG_STREAM_NAMED("octomap_bbx","Min key: " << m_updateBBXMin[0] << " " << m_updateBBXMin[1]);
       ROS_DEBUG_STREAM_NAMED("octomap_bbx","Max key: " << m_updateBBXMax[0] << " " << m_updateBBXMax[1]);
 
-      // Enable BBX, which means sensors are not allowed to insert points beyond this bounded region.
-      m_octree->useBBXLimit(true);
-
       // Set the BBX min and Max on the octree
       m_octree->setBBXMin(baseFrameBBXMin);
       m_octree->setBBXMax(baseFrameBBXMax);
+
+      // Enable BBX, which means sensors are not allowed to insert points beyond this bounded region.
+      m_octree->useBBXLimit(true);
 
       // Expand thre tree 
       // m_octree->expand();
@@ -602,7 +602,7 @@ void OctomapServer::publishAll(const ros::Time& rostime){
   size_t octomapSize = m_octree->size();
   // TODO: estimate num occ. voxels for size of arrays (reserve)
   if (octomapSize <= 1){
-    // ROS_DEBUG("Nothing to publish, octree is empty");
+    // ROS_WARN("Nothing to publish, octree is empty");
     return;
   }
 
@@ -1058,25 +1058,47 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
 
     // TODO: move most of this stuff into c'tor and init map only once (adjust if size changes)
     double minX, minY, minZ, maxX, maxY, maxZ;
-    m_octree->getMetricMin(minX, minY, minZ);
-    m_octree->getMetricMax(maxX, maxY, maxZ);
+    octomap::point3d minPt;
+    octomap::point3d maxPt;
 
-    octomap::point3d minPt(minX, minY, minZ);
-    octomap::point3d maxPt(maxX, maxY, maxZ);
+    // We used to get the metric min/max of the entire octmap - now we only get the min/max of the bounding box!
+    bool useBBX = true;
+    if(m_octree->bbxSet() && useBBX)
+    {
+      // ROS_WARN("Using BBX min/max");
+      minPt = m_octree->getBBXMin();
+      maxPt = m_octree->getBBXMax();
+      // Print the bounding box points
+      // ROS_WARN("BBX min: %f %f %f", minPt.x(), minPt.y(), minPt.z());
+      // ROS_WARN("BBX max: %f %f %f", maxPt.x(), maxPt.y(), maxPt.z());
+      // Update the individual min/max values
+      minX = minPt.x();
+      minY = minPt.y();
+      minZ = minPt.z();
+      maxX = maxPt.x();
+      maxY = maxPt.y();
+      maxZ = maxPt.z();
+    }else{
+      m_octree->getMetricMin(minX, minY, minZ);
+      m_octree->getMetricMax(maxX, maxY, maxZ);
+      minPt = octomap::point3d(minX, minY, minZ);
+      maxPt = octomap::point3d(maxX, maxY, maxZ);
+    }
+
     octomap::OcTreeKey minKey = m_octree->coordToKey(minPt, m_maxTreeDepth);
     octomap::OcTreeKey maxKey = m_octree->coordToKey(maxPt, m_maxTreeDepth);
 
     ROS_DEBUG("MinKey: %d %d %d / MaxKey: %d %d %d", minKey[0], minKey[1], minKey[2], maxKey[0], maxKey[1], maxKey[2]);
 
-    // add padding if requested (= new min/maxPts in x&y):
-    double halfPaddedX = 0.5*m_minSizeX;
-    double halfPaddedY = 0.5*m_minSizeY;
-    minX = std::min(minX, -halfPaddedX);
-    maxX = std::max(maxX, halfPaddedX);
-    minY = std::min(minY, -halfPaddedY);
-    maxY = std::max(maxY, halfPaddedY);
-    minPt = octomap::point3d(minX, minY, minZ);
-    maxPt = octomap::point3d(maxX, maxY, maxZ);
+    // // add padding if requested (= new min/maxPts in x&y):
+    // double halfPaddedX = 0.5*m_minSizeX;
+    // double halfPaddedY = 0.5*m_minSizeY;
+    // minX = std::min(minX, -halfPaddedX);
+    // maxX = std::max(maxX, halfPaddedX);
+    // minY = std::min(minY, -halfPaddedY);
+    // maxY = std::max(maxY, halfPaddedY);
+    // minPt = octomap::point3d(minX, minY, minZ);
+    // maxPt = octomap::point3d(maxX, maxY, maxZ);
 
     OcTreeKey paddedMaxKey;
     if (!m_octree->coordToKeyChecked(minPt, m_maxTreeDepth, m_paddedMinKey)){
@@ -1089,23 +1111,26 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
     }
 
     ROS_DEBUG("Padded MinKey: %d %d %d / padded MaxKey: %d %d %d", m_paddedMinKey[0], m_paddedMinKey[1], m_paddedMinKey[2], paddedMaxKey[0], paddedMaxKey[1], paddedMaxKey[2]);
-    assert(paddedMaxKey[0] >= maxKey[0] && paddedMaxKey[1] >= maxKey[1]);
+    // assert(paddedMaxKey[0] >= maxKey[0] && paddedMaxKey[1] >= maxKey[1]);
 
     m_multires2DScale = 1 << (m_treeDepth - m_maxTreeDepth);
     m_gridmap.info.width = (paddedMaxKey[0] - m_paddedMinKey[0])/m_multires2DScale +1;
     m_gridmap.info.height = (paddedMaxKey[1] - m_paddedMinKey[1])/m_multires2DScale +1;
 
-    int mapOriginX = minKey[0] - m_paddedMinKey[0];
-    int mapOriginY = minKey[1] - m_paddedMinKey[1];
-    assert(mapOriginX >= 0 && mapOriginY >= 0);
+    // int mapOriginX = minKey[0] - m_paddedMinKey[0];
+    // int mapOriginY = minKey[1] - m_paddedMinKey[1];
+    // assert(mapOriginX >= 0 && mapOriginY >= 0);
 
     // might not exactly be min / max of octree:
     octomap::point3d origin = m_octree->keyToCoord(m_paddedMinKey, m_treeDepth);
     double gridRes = m_octree->getNodeSize(m_maxTreeDepth);
+
     m_projectCompleteMap = (!m_incrementalUpdate || (std::abs(gridRes-m_gridmap.info.resolution) > 1e-6));
+
     m_gridmap.info.resolution = gridRes;
     m_gridmap.info.origin.position.x = origin.x() - gridRes*0.5;
     m_gridmap.info.origin.position.y = origin.y() - gridRes*0.5;
+
     if (m_maxTreeDepth != m_treeDepth){
       m_gridmap.info.origin.position.x -= m_res/2.0;
       m_gridmap.info.origin.position.y -= m_res/2.0;
@@ -1122,39 +1147,7 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
       m_gridmap.data.clear();
       // init to unknown:
       m_gridmap.data.resize(m_gridmap.info.width * m_gridmap.info.height, -1);
-
-    } else {
-
-       if (mapChanged(oldMapInfo, m_gridmap.info)){
-          ROS_DEBUG("2D grid map size changed to %dx%d", m_gridmap.info.width, m_gridmap.info.height);
-          adjustMapData(m_gridmap, oldMapInfo);
-       }
-
-       nav_msgs::OccupancyGrid::_data_type::iterator startIt;
-       size_t mapUpdateBBXMinX = std::max(0, (int(m_updateBBXMin[0]) - int(m_paddedMinKey[0]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMinY = std::max(0, (int(m_updateBBXMin[1]) - int(m_paddedMinKey[1]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMaxX = std::min(int(m_gridmap.info.width-1), (int(m_updateBBXMax[0]) - int(m_paddedMinKey[0]))/int(m_multires2DScale));
-       size_t mapUpdateBBXMaxY = std::min(int(m_gridmap.info.height-1), (int(m_updateBBXMax[1]) - int(m_paddedMinKey[1]))/int(m_multires2DScale));
-
-       assert(mapUpdateBBXMaxX > mapUpdateBBXMinX);
-       assert(mapUpdateBBXMaxY > mapUpdateBBXMinY);
-
-       size_t numCols = mapUpdateBBXMaxX-mapUpdateBBXMinX +1;
-
-       // test for max idx:
-       uint max_idx = m_gridmap.info.width*mapUpdateBBXMaxY + mapUpdateBBXMaxX;
-       if (max_idx  >= m_gridmap.data.size())
-         ROS_ERROR("BBX index not valid: %d (max index %zu for size %d x %d) update-BBX is: [%zu %zu]-[%zu %zu]", max_idx, m_gridmap.data.size(), m_gridmap.info.width, m_gridmap.info.height, mapUpdateBBXMinX, mapUpdateBBXMinY, mapUpdateBBXMaxX, mapUpdateBBXMaxY);
-
-       // reset proj. 2D map in bounding box:
-       for (unsigned int j = mapUpdateBBXMinY; j <= mapUpdateBBXMaxY; ++j){
-          std::fill_n(m_gridmap.data.begin() + m_gridmap.info.width*j+mapUpdateBBXMinX, numCols, -1);
-       }
-
-    }
-
-
-
+    } 
   }
 
 }
@@ -1164,25 +1157,25 @@ void OctomapServer::handlePostNodeTraversal(const ros::Time& rostime){
 }
 
 void OctomapServer::handleOccupiedNode(const OcTreeT::iterator& it){
-  if (m_publish2DMap && m_projectCompleteMap){
-    update2DMap(it, true);
-  }
+  // if (m_publish2DMap && m_projectCompleteMap){
+  //   update2DMap(it, true);
+  // }
 }
 
 void OctomapServer::handleFreeNode(const OcTreeT::iterator& it){
-  if (m_publish2DMap && m_projectCompleteMap){
-    update2DMap(it, false);
-  }
+  // if (m_publish2DMap && m_projectCompleteMap){
+  //   update2DMap(it, false);
+  // }
 }
 
 void OctomapServer::handleOccupiedNodeInBBX(const OcTreeT::iterator& it){
-  if (m_publish2DMap && !m_projectCompleteMap){
+  if (m_publish2DMap && m_projectCompleteMap){
     update2DMap(it, true);
   }
 }
 
 void OctomapServer::handleFreeNodeInBBX(const OcTreeT::iterator& it){
-  if (m_publish2DMap && !m_projectCompleteMap){
+  if (m_publish2DMap && m_projectCompleteMap){
     update2DMap(it, false);
   }
 }
@@ -1190,29 +1183,60 @@ void OctomapServer::handleFreeNodeInBBX(const OcTreeT::iterator& it){
 void OctomapServer::update2DMap(const OcTreeT::iterator& it, bool occupied){
   // update 2D map (occupied always overrides):
 
-  if (it.getDepth() == m_maxTreeDepth){
-    unsigned idx = mapIdx(it.getKey());
-    if (occupied)
-      m_gridmap.data[mapIdx(it.getKey())] = 100;
-    else if (m_gridmap.data[idx] == -1){
-      m_gridmap.data[idx] = 0;
-    }
+  // if (it.getDepth() == m_maxTreeDepth){
 
-  } else{
+  //   unsigned idx = mapIdx(it.getKey());
+
+  //   if (occupied)
+  //     m_gridmap.data[mapIdx(it.getKey())] = 100;
+  //   else if (m_gridmap.data[idx] == -1){
+  //     m_gridmap.data[idx] = 0;
+  //   }
+
+  // } else{
+
+
     int intSize = 1 << (m_maxTreeDepth - it.getDepth());
+
     octomap::OcTreeKey minKey=it.getIndexKey();
+
+    // Calculate the i and j offset introducted 
+    // by the different in position between the minKey and the paddedMinKey
+    // This is necessary because the width of the array may cross the boundary of the axis
+
     for(int dx=0; dx < intSize; dx++){
+
       int i = (minKey[0]+dx - m_paddedMinKey[0])/m_multires2DScale;
+      // Handle the case where i (the 'width' index) is negative or above the width of the array
+      if (i < 0 || i >= m_gridmap.info.width){
+        continue;
+      }
+
       for(int dy=0; dy < intSize; dy++){
-        unsigned idx = mapIdx(i, (minKey[1]+dy - m_paddedMinKey[1])/m_multires2DScale);
+        int j = (minKey[1]+dy - m_paddedMinKey[1])/m_multires2DScale;
+        // Handle the case where j (the 'height' index) is negative, or above the height of the array
+        if (j < 0 || j >= m_gridmap.info.height){
+          continue;
+        }
+
+        // Log i,j, dx, and dy
+        ROS_DEBUG("j: %d, i: %d, dx: %d, dy: %d", j, i, dx, dy);
+        // Log the minKey
+        ROS_DEBUG("minKey: %d, %d, %d", minKey[0], minKey[1], minKey[2]);
+        // Log the paddedMinKey
+        ROS_DEBUG("paddedMinKey: %d, %d, %d", m_paddedMinKey[0], m_paddedMinKey[1], m_paddedMinKey[2]);
+
+        unsigned idx = mapIdx(i, j);
+
         if (occupied)
           m_gridmap.data[idx] = 100;
         else if (m_gridmap.data[idx] == -1){
           m_gridmap.data[idx] = 0;
         }
       }
+
     }
-  }
+  // }
 
 
 }
