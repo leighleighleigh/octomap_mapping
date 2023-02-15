@@ -530,34 +530,40 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       ROS_DEBUG_STREAM_NAMED("octomap_bbx","Min key: " << m_updateBBXMin[0] << " " << m_updateBBXMin[1]);
       ROS_DEBUG_STREAM_NAMED("octomap_bbx","Max key: " << m_updateBBXMax[0] << " " << m_updateBBXMax[1]);
 
-      // Enable BBX
+      // Enable BBX, which means sensors are not allowed to insert points beyond this bounded region.
       m_octree->useBBXLimit(true);
 
       // Set the BBX min and Max on the octree
       m_octree->setBBXMin(baseFrameBBXMin);
       m_octree->setBBXMax(baseFrameBBXMax);
 
-      // For everything outside the BBX, we will set the occupancy to 0
-      // This is done in a naive way by iterating over all the voxels in the octree
-      double thresMin = m_octree->getClampingThresMin();
+      // Expand thre tree 
+      // m_octree->expand();
 
-      for(OcTreeT::iterator it = m_octree->begin(m_maxTreeDepth), end=m_octree->end(); it!= end; ++it) {
+      for(OcTreeT::iterator it = m_octree->begin_leafs(m_maxTreeDepth), end=m_octree->end_leafs(); it!= end; ++it) {
         octomap::OcTreeKey key = it.getKey();
 
         // The if condition checks for INSIDE the BBX
-        if (key[0] >= bbxMinKey[0] && key[0] <= bbxMaxKey[0]
-            && key[1] >= bbxMinKey[1] && key[1] <= bbxMaxKey[1]
-            && key[2] >= bbxMinKey[2] && key[2] <= bbxMaxKey[2])
+        if (key[0] >= m_updateBBXMin[0] && key[0] <= m_updateBBXMax[0]
+            && key[1] >= m_updateBBXMin[1] && key[1] <= m_updateBBXMax[1]
+            && key[2] >= m_updateBBXMin[2] && key[2] <= m_updateBBXMax[2])
         {
-          // Point is inside bounds
-        }else{
-          it->setLogOdds(octomap::logodds(thresMin));
+          // Point is inside bounds, keep it
+          continue;
         }
+        
+        // It was leaf, and was outside bbx.
+        // Delete it!
+        // it->setLogOdds(octomap::logodds(thresMin));
+        octomap::point3d keyPoint = m_octree->keyToCoord(key, m_treeDepth);
+        ROS_DEBUG("Deleting point outside bbx %f %f %f", keyPoint.x(), keyPoint.y(), keyPoint.z());
+        m_octree->deleteNode(key, it.getDepth());
       }
+      
+      // Prune will happen later (during compress)
+      // m_octree->prune();
 
-      // Unsure if this is needed?
-      m_octree->updateInnerOccupancy();
-
+      // m_octree->updateInnerOccupancy();
 
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
@@ -1123,6 +1129,7 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
           ROS_DEBUG("2D grid map size changed to %dx%d", m_gridmap.info.width, m_gridmap.info.height);
           adjustMapData(m_gridmap, oldMapInfo);
        }
+
        nav_msgs::OccupancyGrid::_data_type::iterator startIt;
        size_t mapUpdateBBXMinX = std::max(0, (int(m_updateBBXMin[0]) - int(m_paddedMinKey[0]))/int(m_multires2DScale));
        size_t mapUpdateBBXMinY = std::max(0, (int(m_updateBBXMin[1]) - int(m_paddedMinKey[1]))/int(m_multires2DScale));
@@ -1141,8 +1148,7 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
 
        // reset proj. 2D map in bounding box:
        for (unsigned int j = mapUpdateBBXMinY; j <= mapUpdateBBXMaxY; ++j){
-          std::fill_n(m_gridmap.data.begin() + m_gridmap.info.width*j+mapUpdateBBXMinX,
-                      numCols, -1);
+          std::fill_n(m_gridmap.data.begin() + m_gridmap.info.width*j+mapUpdateBBXMinX, numCols, -1);
        }
 
     }
