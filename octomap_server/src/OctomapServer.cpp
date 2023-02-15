@@ -602,7 +602,7 @@ void OctomapServer::publishAll(const ros::Time& rostime){
   size_t octomapSize = m_octree->size();
   // TODO: estimate num occ. voxels for size of arrays (reserve)
   if (octomapSize <= 1){
-    ROS_WARN("Nothing to publish, octree is empty");
+    // ROS_DEBUG("Nothing to publish, octree is empty");
     return;
   }
 
