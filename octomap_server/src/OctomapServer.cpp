@@ -52,10 +52,10 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_useHeightMap(true),
   m_useColoredMap(false),
   m_colorFactor(0.8),
-  m_latchedTopics(true),
+  m_latchedTopics(false),
   m_publishFreeSpace(false),
   m_usePublishTimer(true),
-  m_publishPeriod(0.2),
+  m_publishPeriod(0.1),
   m_res(0.05),
   m_treeDepth(0),
   m_maxTreeDepth(0),
@@ -70,10 +70,9 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_minSizeX(0.0), m_minSizeY(0.0),
   m_filterSpeckles(false), m_filterGroundPlane(false),
   m_useBaseFrameBBXLimit(true),
-  m_baseFrameBBXSize(10.0),
+  m_baseFrameBBXSize(5.0),
   m_groundFilterDistance(0.04), m_groundFilterAngle(0.15), m_groundFilterPlaneDistance(0.07),
   m_compressMap(true),
-  m_incrementalUpdate(false),
   m_initConfig(true)
 {
   double probHit, probMiss, thresMin, thresMax;
@@ -119,7 +118,6 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_nh_private.param("sensor_model/min", thresMin, 0.12);
   m_nh_private.param("sensor_model/max", thresMax, 0.97);
   m_nh_private.param("compress_map", m_compressMap, m_compressMap);
-  m_nh_private.param("incremental_2D_projection", m_incrementalUpdate, m_incrementalUpdate);
 
   if (m_filterGroundPlane && (m_pointcloudMinZ > 0.0 || m_pointcloudMaxZ < 0.0)){
     ROS_WARN_STREAM("You enabled ground filtering but incoming pointclouds will be pre-filtered in ["
@@ -181,11 +179,11 @@ OctomapServer::OctomapServer(const ros::NodeHandle private_nh_, const ros::NodeH
   m_binaryMapPub = m_nh.advertise<Octomap>("octomap_binary", 1, m_latchedTopics);
   m_fullMapPub = m_nh.advertise<Octomap>("octomap_full", 1, m_latchedTopics);
   m_pointCloudPub = m_nh.advertise<sensor_msgs::PointCloud2>("octomap_point_cloud_centers", 1, m_latchedTopics);
-  m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 5, m_latchedTopics);
+  m_mapPub = m_nh.advertise<nav_msgs::OccupancyGrid>("projected_map", 10, m_latchedTopics);
   m_fmarkerPub = m_nh.advertise<visualization_msgs::MarkerArray>("free_cells_vis_array", 1, m_latchedTopics);
 
-  m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 50);
-  m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 50);
+  m_pointCloudSub = new message_filters::Subscriber<sensor_msgs::PointCloud2> (m_nh, "cloud_in", 10);
+  m_tfPointCloudSub = new tf::MessageFilter<sensor_msgs::PointCloud2> (*m_pointCloudSub, m_tfListener, m_worldFrameId, 10);
   m_tfPointCloudSub->registerCallback(boost::bind(&OctomapServer::insertCloudCallback, this, boost::placeholders::_1));
 
   m_octomapBinaryService = m_nh.advertiseService("octomap_binary", &OctomapServer::octomapBinarySrv, this);
@@ -490,6 +488,8 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 
   // If base frame BBX limit is enabled, we will 'crop' the map to a square region surrounding the robot base frame
   // First we will look up the transform from the base_frame to the map frame (world frame)
+  // And then calculate the bounding box region.
+  // The cropping is applied during the node handle methods.
   if(m_useBaseFrameBBXLimit)
   {
     tf::StampedTransform baseToWorldTf;
@@ -507,8 +507,26 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
       baseFrameBBXMax(1) = baseToWorldTf.getOrigin().y() + m_baseFrameBBXSize/2.0;
       baseFrameBBXMax(2) = baseToWorldTf.getOrigin().z() + m_baseFrameBBXSize/2.0;
 
+      double minX, minY, minZ, maxX, maxY, maxZ;
+      octomap::point3d mapMinimumPoint;
+      octomap::point3d mapMaximumPoint;
+
+      m_octree->getMetricMin(minX, minY, minZ);
+      m_octree->getMetricMax(maxX, maxY, maxZ);
+      mapMinimumPoint = octomap::point3d(minX, minY, minZ);
+      mapMaximumPoint = octomap::point3d(maxX, maxY, maxZ);
+
+      // We only want to reduce the size of the existing octomap - so if the metricMin is already smaller than one of our bbxmin/max points,
+      // we will change our min/max to match it.
+      baseFrameBBXMin(0) = std::max(baseFrameBBXMin.x(), mapMinimumPoint.x());
+      baseFrameBBXMin(1) = std::max(baseFrameBBXMin.y(), mapMinimumPoint.y());
+      baseFrameBBXMin(2) = std::max(baseFrameBBXMin.z(), mapMinimumPoint.z());
+      baseFrameBBXMax(0) = std::min(baseFrameBBXMax.x(), mapMaximumPoint.x());
+      baseFrameBBXMax(1) = std::min(baseFrameBBXMax.y(), mapMaximumPoint.y());
+      baseFrameBBXMax(2) = std::min(baseFrameBBXMax.z(), mapMaximumPoint.z());
+
       // Print out the base frame BBX
-      ROS_INFO_STREAM_NAMED("octomap_bbx","Base frame BBX: " << baseFrameBBXMin(0) << " " << baseFrameBBXMin(1) << " " << baseFrameBBXMin(2) << " / " << baseFrameBBXMax(0) << " " << baseFrameBBXMax(1) << " " << baseFrameBBXMax(2));
+      ROS_DEBUG_STREAM_NAMED("octomap_bbx","Base frame BBX: " << baseFrameBBXMin(0) << " " << baseFrameBBXMin(1) << " " << baseFrameBBXMin(2) << " / " << baseFrameBBXMax(0) << " " << baseFrameBBXMax(1) << " " << baseFrameBBXMax(2));
         
       octomap::OcTreeKey minKey;
       if (m_octree->coordToKeyChecked(baseFrameBBXMin, minKey)){
@@ -536,34 +554,6 @@ void OctomapServer::insertScan(const tf::Point& sensorOriginTf, const PCLPointCl
 
       // Enable BBX, which means sensors are not allowed to insert points beyond this bounded region.
       m_octree->useBBXLimit(true);
-
-      // Expand thre tree 
-      // m_octree->expand();
-
-      for(OcTreeT::iterator it = m_octree->begin_leafs(m_maxTreeDepth), end=m_octree->end_leafs(); it!= end; ++it) {
-        octomap::OcTreeKey key = it.getKey();
-
-        // The if condition checks for INSIDE the BBX
-        if (key[0] >= m_updateBBXMin[0] && key[0] <= m_updateBBXMax[0]
-            && key[1] >= m_updateBBXMin[1] && key[1] <= m_updateBBXMax[1]
-            && key[2] >= m_updateBBXMin[2] && key[2] <= m_updateBBXMax[2])
-        {
-          // Point is inside bounds, keep it
-          continue;
-        }
-        
-        // It was leaf, and was outside bbx.
-        // Delete it!
-        // it->setLogOdds(octomap::logodds(thresMin));
-        octomap::point3d keyPoint = m_octree->keyToCoord(key, m_treeDepth);
-        ROS_DEBUG("Deleting point outside bbx %f %f %f", keyPoint.x(), keyPoint.y(), keyPoint.z());
-        m_octree->deleteNode(key, it.getDepth());
-      }
-      
-      // Prune will happen later (during compress)
-      // m_octree->prune();
-
-      // m_octree->updateInnerOccupancy();
 
     }catch(tf::TransformException& ex){
       ROS_ERROR_STREAM( "Transform error for base_frame BBX crop: " << ex.what() << ", quitting callback.\n"
@@ -639,8 +629,14 @@ void OctomapServer::publishAll(const ros::Time& rostime){
 
     // call general hook:
     handleNode(it);
-    if (inUpdateBBX)
+
+    if (inUpdateBBX) {
       handleNodeInBBX(it);
+    }else{
+      // Outside of the bounding box, so we delete this node.
+      octomap::OcTreeKey key = it.getKey();
+      m_octree->deleteNode(key, it.getDepth());
+    }
 
     if (m_octree->isNodeOccupied(*it)){
       double z = it.getZ();
@@ -1090,16 +1086,6 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
 
     ROS_DEBUG("MinKey: %d %d %d / MaxKey: %d %d %d", minKey[0], minKey[1], minKey[2], maxKey[0], maxKey[1], maxKey[2]);
 
-    // // add padding if requested (= new min/maxPts in x&y):
-    // double halfPaddedX = 0.5*m_minSizeX;
-    // double halfPaddedY = 0.5*m_minSizeY;
-    // minX = std::min(minX, -halfPaddedX);
-    // maxX = std::max(maxX, halfPaddedX);
-    // minY = std::min(minY, -halfPaddedY);
-    // maxY = std::max(maxY, halfPaddedY);
-    // minPt = octomap::point3d(minX, minY, minZ);
-    // maxPt = octomap::point3d(maxX, maxY, maxZ);
-
     OcTreeKey paddedMaxKey;
     if (!m_octree->coordToKeyChecked(minPt, m_maxTreeDepth, m_paddedMinKey)){
       ROS_ERROR("Could not create padded min OcTree key at %f %f %f", minPt.x(), minPt.y(), minPt.z());
@@ -1117,15 +1103,9 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
     m_gridmap.info.width = (paddedMaxKey[0] - m_paddedMinKey[0])/m_multires2DScale +1;
     m_gridmap.info.height = (paddedMaxKey[1] - m_paddedMinKey[1])/m_multires2DScale +1;
 
-    // int mapOriginX = minKey[0] - m_paddedMinKey[0];
-    // int mapOriginY = minKey[1] - m_paddedMinKey[1];
-    // assert(mapOriginX >= 0 && mapOriginY >= 0);
-
     // might not exactly be min / max of octree:
     octomap::point3d origin = m_octree->keyToCoord(m_paddedMinKey, m_treeDepth);
     double gridRes = m_octree->getNodeSize(m_maxTreeDepth);
-
-    m_projectCompleteMap = (!m_incrementalUpdate || (std::abs(gridRes-m_gridmap.info.resolution) > 1e-6));
 
     m_gridmap.info.resolution = gridRes;
     m_gridmap.info.origin.position.x = origin.x() - gridRes*0.5;
@@ -1136,18 +1116,10 @@ void OctomapServer::handlePreNodeTraversal(const ros::Time& rostime){
       m_gridmap.info.origin.position.y -= m_res/2.0;
     }
 
-    // workaround for  multires. projection not working properly for inner nodes:
-    // force re-building complete map
-    if (m_maxTreeDepth < m_treeDepth)
-      m_projectCompleteMap = true;
-
-
-    if(m_projectCompleteMap){
-      ROS_DEBUG("Rebuilding complete 2D map");
-      m_gridmap.data.clear();
-      // init to unknown:
-      m_gridmap.data.resize(m_gridmap.info.width * m_gridmap.info.height, -1);
-    } 
+    ROS_DEBUG("Rebuilding complete 2D map");
+    m_gridmap.data.clear();
+    // init to unknown:
+    m_gridmap.data.resize(m_gridmap.info.width * m_gridmap.info.height, -1);
   }
 
 }
@@ -1157,25 +1129,25 @@ void OctomapServer::handlePostNodeTraversal(const ros::Time& rostime){
 }
 
 void OctomapServer::handleOccupiedNode(const OcTreeT::iterator& it){
-  // if (m_publish2DMap && m_projectCompleteMap){
+  // if (m_publish2DMap){
   //   update2DMap(it, true);
   // }
 }
 
 void OctomapServer::handleFreeNode(const OcTreeT::iterator& it){
-  // if (m_publish2DMap && m_projectCompleteMap){
+  // if (m_publish2DMap){
   //   update2DMap(it, false);
   // }
 }
 
 void OctomapServer::handleOccupiedNodeInBBX(const OcTreeT::iterator& it){
-  if (m_publish2DMap && m_projectCompleteMap){
+  if (m_publish2DMap){
     update2DMap(it, true);
   }
 }
 
 void OctomapServer::handleFreeNodeInBBX(const OcTreeT::iterator& it){
-  if (m_publish2DMap && m_projectCompleteMap){
+  if (m_publish2DMap){
     update2DMap(it, false);
   }
 }
@@ -1274,7 +1246,6 @@ void OctomapServer::reconfigureCallback(octomap_server::OctomapServerConfig& con
     m_filterSpeckles            = config.filter_speckles;
     m_filterGroundPlane         = config.filter_ground;
     m_compressMap               = config.compress_map;
-    m_incrementalUpdate         = config.incremental_2D_projection;
 
     // Parameters with a namespace require an special treatment at the beginning, as dynamic reconfigure
     // will overwrite them because the server is not able to match parameters' names.
